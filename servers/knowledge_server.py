@@ -64,12 +64,15 @@ def _tokens(q: str) -> list[str]:
 
 
 @mcp.tool()
-def search_knowledge(query: str) -> str:
+async def search_knowledge(query: str) -> str:
     """检索陕西文旅知识库（景点背景、文物故事、参观攻略、行程方法论、美食贴士）。任何涉及景点介绍、文物历史、游玩攻略、行程规划建议的问题，必须先调用本工具获取知识再回答，禁止凭模型记忆作答。
 
     Args:
         query: 检索词，如 "何尊 中国一词"、"兵马俑 参观攻略"、"华山 路线"
     """
+    # 注意：必须是 async def —— FastMCP 会把 sync 工具丢进 anyio 工作线程执行，
+    # 而 onnxruntime（ChromaDB 内置 embedding）在非主线程初始化会直接段错误崩进程（实测踩坑）。
+    # async 工具在 Server 事件循环（主线程）执行，查询耗时约 1-2s，可接受。
     try:
         col = _collection()
         if col.count() == 0:
@@ -95,7 +98,7 @@ def search_knowledge(query: str) -> str:
 
 
 @mcp.tool()
-def rebuild_knowledge() -> str:
+async def rebuild_knowledge() -> str:
     """重建知识库索引（管理员操作用，普通用户问题不要调用本工具）。"""
     try:
         col = _collection()
@@ -110,4 +113,5 @@ if __name__ == "__main__":
         _collection()
         print(f"知识库就绪，共 {_col.count()} 条")
     else:
+        _collection()  # 启动时在主线程预加载 embedding 模型（避免首个请求才初始化）
         mcp.run(transport="stdio")

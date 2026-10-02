@@ -26,10 +26,10 @@ RESULTS = ROOT / "evaluation" / "evaluation_results.json"
 async def run_one(agent, item: dict) -> dict:
     t0 = time.time()
     try:
-        result = await agent.ainvoke(
+        result = await asyncio.wait_for(agent.ainvoke(
             {"messages": [HumanMessage(content=item["input"])]},
             {"configurable": {"thread_id": uuid.uuid4().hex[:12]}},
-        )
+        ), timeout=120)  # 单例超时保险丝：LLM 服务端挂起时整条批次不被拖死
         msgs = result["messages"]
         called = [m.name for m in msgs if isinstance(m, ToolMessage)]
         answer = next((m.content for m in reversed(msgs)
@@ -54,14 +54,14 @@ async def main():
     items = json.loads(TESTSET.read_text(encoding="utf-8"))[:limit]
 
     async with create_app_agent() as (agent, tools):
-        print(f"评估集 {len(items)} 条，工具 {len(tools)} 个，开始跑批…")
+        print(f"评估集 {len(items)} 条，工具 {len(tools)} 个，开始跑批…", flush=True)
         rows = []
         for i, item in enumerate(items, 1):
             r = await run_one(agent, item)
             rows.append(r)
             mark = "✅" if r["passed"] else "❌"
             print(f"[{i}/{len(items)}] {mark} {r['id']} 工具{r['called']} "
-                  f"要点{r['kp_hit']}/{r['kp_total']} {r['elapsed']}s")
+                  f"要点{r['kp_hit']}/{r['kp_total']} {r['elapsed']}s", flush=True)
 
     total = len(rows)
     passed = sum(r["passed"] for r in rows)

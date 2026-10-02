@@ -1,0 +1,19 @@
+# Render Blueprint：在 Render 控制台 New → Blueprint 选中本仓库即可一键创建
+# 也可以手动 New Web Service，按下面的 build/start 命令照抄
+services:
+  - type: web
+    name: shanhe-zhidao
+    runtime: python
+    plan: free
+    # 建库放 Build 阶段：首次构建下载约 79MB embedding 模型，之后镜像缓存
+    buildCommand: pip install -r requirements.txt && python servers/knowledge_server.py --build
+    startCommand: uvicorn api_server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DEEPSEEK_API_KEY
+        sync: false        # 在 Render 控制台手动填，绝不入库
+      - key: AMAP_KEY
+        sync: false        # 可选：高德 Key，不填则地图工具走优雅降级
+      - key: LLM_MODEL
+        value: deepseek-chat
+      - key: LLM_BASE_URL
+        value: https://api.deepseek.com

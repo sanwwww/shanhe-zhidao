@@ -1,0 +1,22 @@
+{
+  "weather": {
+    "command": "python",
+    "args": ["servers/weather_server.py"],
+    "transport": "stdio"
+  },
+  "amap": {
+    "command": "python",
+    "args": ["servers/map_server.py"],
+    "transport": "stdio"
+  },
+  "knowledge": {
+    "command": "python",
+    "args": ["servers/knowledge_server.py"],
+    "transport": "stdio"
+  },
+  "guide": {
+    "command": "python",
+    "args": ["servers/guide_server.py"],
+    "transport": "stdio"
+  }
+}

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>山河智导 · 文旅导览 Agent</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5/index.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5/index.css">
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<style>
+:root{
+  --bg:#0b1410; --panel:#101d17; --line:#1f3a2e; --ink:#d8e8dd; --dim:#6f8f7d;
+  --acc:#3ddc97; --acc2:#e8c468; --tool:#153527; --err:#ff6b6b;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:"Noto Serif SC",serif;min-height:100vh;display:flex;
+  background-image:linear-gradient(rgba(61,220,151,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(61,220,151,.03) 1px,transparent 1px);background-size:36px 36px}
+aside{width:250px;border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:14px;background:var(--panel)}
+aside h1{font-size:20px;color:var(--acc);letter-spacing:2px}
+aside .sub{font-size:11px;color:var(--dim);line-height:1.6}
+.stat{border:1px solid var(--line);padding:10px 12px;font-size:12px;color:var(--dim)}
+.stat b{color:var(--acc2);font-family:"JetBrains Mono",monospace;font-size:16px;display:block;margin-top:4px}
+#newBtn{background:none;border:1px solid var(--acc);color:var(--acc);padding:8px;cursor:pointer;font-family:inherit;font-size:13px}
+#newBtn:hover{background:var(--acc);color:#062b1c}
+#hist{flex:1;overflow-y:auto;font-size:12px}
+#hist div{padding:6px 8px;border-left:2px solid var(--line);margin-bottom:6px;color:var(--dim);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#hist div:hover,#hist div.on{border-color:var(--acc);color:var(--ink)}
+main{flex:1;display:flex;flex-direction:column;height:100vh}
+#chat{flex:1;overflow-y:auto;padding:28px 8vw 20px}
+.msg{margin-bottom:22px;max-width:860px}
+.msg .who{font-size:11px;color:var(--dim);margin-bottom:6px;letter-spacing:1px}
+.msg.user .who{color:var(--acc2)}
+.msg .body{line-height:1.9;font-size:15px}
+.msg .body pre{background:#08110c;border:1px solid var(--line);padding:12px;overflow-x:auto;font-family:"JetBrains Mono",monospace;font-size:13px}
+.msg .body code{font-family:"JetBrains Mono",monospace;color:var(--acc)}
+.tcard{border:1px solid var(--line);border-left:3px solid var(--acc);background:var(--tool);margin:8px 0;font-size:12px}
+.tcard .hd{padding:6px 10px;cursor:pointer;display:flex;justify-content:space-between;color:var(--acc)}
+.tcard .dt{display:none;padding:8px 10px;border-top:1px solid var(--line);color:var(--dim);white-space:pre-wrap;font-family:"JetBrains Mono",monospace;max-height:220px;overflow-y:auto}
+.tcard.open .dt{display:block}
+#inputBar{border-top:1px solid var(--line);padding:16px 8vw;display:flex;gap:10px;background:var(--panel)}
+#msgIn{flex:1;background:#08110c;border:1px solid var(--line);color:var(--ink);padding:12px 14px;font-family:inherit;font-size:15px;resize:none;height:52px}
+#msgIn:focus{outline:none;border-color:var(--acc)}
+#sendBtn{background:var(--acc);color:#062b1c;border:none;padding:0 26px;font-family:inherit;font-size:15px;font-weight:bold;cursor:pointer}
+#sendBtn:disabled{background:var(--line);color:var(--dim);cursor:not-allowed}
+#chips{padding:10px 8vw 0;display:flex;gap:8px;flex-wrap:wrap}
+#chips span{border:1px solid var(--line);color:var(--dim);font-size:12px;padding:4px 12px;cursor:pointer;border-radius:20px}
+#chips span:hover{border-color:var(--acc);color:var(--acc)}
+.typing::after{content:"▌";color:var(--acc);animation:blink 1s infinite}
+@keyframes blink{50%{opacity:0}}
+@media(max-width:760px){aside{display:none}#chat,#inputBar,#chips{padding-left:5vw;padding-right:5vw}}
+</style>
+</head>
+<body>
+<aside>
+  <h1>山河智导</h1>
+  <div class="sub">MCP × LangGraph 文旅导览 Agent<br>查路线 · 看天气 · 听讲解 · 规划行程</div>
+  <div class="stat">工具调用<b id="sTools">0</b></div>
+  <div class="stat">最近耗时<b id="sTime">—</b></div>
+  <button id="newBtn">＋ 新会话</button>
+  <div id="hist"></div>
+</aside>
+<main>
+  <div id="chat"></div>
+  <div id="chips">
+    <span>给我讲讲何尊为什么重要</span>
+    <span>从钟楼到兵马俑怎么走</span>
+    <span>西安未来三天天气，适合爬山吗</span>
+    <span>帮我规划西安一日游行程</span>
+    <span>给小学生讲兵马俑怎么讲</span>
+  </div>
+  <div id="inputBar">
+    <textarea id="msgIn" placeholder="问我任何陕西旅行问题…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button id="sendBtn">发送</button>
+  </div>
+</main>
+<script>
+const chat=document.getElementById('chat'),msgIn=document.getElementById('msgIn'),sendBtn=document.getElementById('sendBtn');
+let threadId=localStorage.getItem('sh_thread')||null;
+let hist=JSON.parse(localStorage.getItem('sh_hist')||'[]');
+let nTools=0;
+
+function renderHist(){
+  const box=document.getElementById('hist');box.innerHTML='';
+  hist.slice().reverse().forEach(h=>{
+    const d=document.createElement('div');d.textContent=h.title;
+    if(h.id===threadId)d.classList.add('on');
+    d.onclick=()=>{threadId=h.id;localStorage.setItem('sh_thread',threadId);renderHist();};
+    box.appendChild(d);
+  });
+}
+renderHist();
+
+document.getElementById('newBtn').onclick=()=>{
+  threadId=null;localStorage.removeItem('sh_thread');
+  chat.innerHTML='';renderHist();msgIn.focus();
+};
+document.querySelectorAll('#chips span').forEach(s=>s.onclick=()=>{msgIn.value=s.textContent;send();});
+msgIn.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+sendBtn.onclick=send;
+
+function addMsg(who,text){
+  const m=document.createElement('div');m.className='msg '+(who==='你'?'user':'bot');
+  m.innerHTML=`<div class="who">${who==='你'?'你 · VISITOR':'山河智导 · GUIDE'}</div><div class="body"></div>`;
+  m.querySelector('.body').textContent=text;
+  chat.appendChild(m);chat.scrollTop=chat.scrollHeight;return m;
+}
+function addToolCard(tool,args){
+  const c=document.createElement('div');c.className='tcard';
+  c.innerHTML=`<div class="hd"><span>⚙ ${tool}</span><span>参数：${JSON.stringify(args||{})}</span><span>▸</span></div><div class="dt">执行中…</div>`;
+  c.querySelector('.hd').onclick=()=>c.classList.toggle('open');
+  chat.appendChild(c);chat.scrollTop=chat.scrollHeight;return c;
+}
+
+async function send(){
+  const text=msgIn.value.trim();
+  if(!text||sendBtn.disabled)return;
+  msgIn.value='';sendBtn.disabled=true;
+  addMsg('你',text);
+  const bot=addMsg('山河智导','');const body=bot.querySelector('.body');
+  body.classList.add('typing');let raw='';nTools=0;
+  const toolCards={};
+  const t0=performance.now();
+  try{
+    const resp=await fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text,thread_id:threadId})});
+    if(!resp.ok){body.textContent='⚠ '+(await resp.json()).detail;return;}
+    const reader=resp.body.getReader(),dec=new TextDecoder();let buf='';
+    while(true){
+      const{done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const parts=buf.split('\n\n');buf=parts.pop();
+      for(const p of parts){
+        const ev=/^event: (.+)$/m.exec(p)?.[1];
+        const data=JSON.parse(/^data: (.+)$/m.exec(p)?.[1]||'{}');
+        if(ev==='delta'){raw+=data.text;body.innerHTML=DOMPurify.sanitize(marked.parse(raw));}
+        else if(ev==='tool_start'){nTools++;document.getElementById('sTools').textContent=nTools;toolCards[data.tool]=addToolCard(data.tool,data.args);}
+        else if(ev==='tool_result'){const c=toolCards[data.tool];if(c){c.querySelector('.dt').textContent=data.result;c.classList.add('open');}}
+        else if(ev==='done'){threadId=data.thread_id;localStorage.setItem('sh_thread',threadId);
+          document.getElementById('sTime').textContent=data.elapsed+'s / '+data.steps+'步';
+          hist=hist.filter(h=>h.id!==threadId);hist.push({id:threadId,title:text.slice(0,18)});
+          localStorage.setItem('sh_hist',JSON.stringify(hist.slice(-10)));renderHist();}
+        else if(ev==='error'){body.textContent='⚠ '+data.answer;}
+        chat.scrollTop=chat.scrollHeight;
+      }
+    }
+  }catch(e){body.textContent='⚠ 网络异常：'+e.message;}
+  finally{body.classList.remove('typing');sendBtn.disabled=false;msgIn.focus();}
+}
+addMsg('山河智导','你好，我是山河智导 🏔\n\n我能帮你：**规划行程**、**查路线**、**看天气**、**讲文物**（依托陕西文旅知识库）。\n\n试试点下面的示例问题，或直接告诉我你想去哪玩。');
+</script>
+</body>
+</html>

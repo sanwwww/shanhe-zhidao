@@ -1,0 +1,36 @@
+[
+  {"id": "weather-01", "category": "天气", "input": "西安现在天气怎么样？", "expected_tools": ["get_weather"], "keypoints": ["气温|温度|°C", "天气|晴|阴|雨|云"]},
+  {"id": "weather-02", "category": "天气", "input": "明天去宝鸡玩，需要带伞吗？", "expected_tools": ["get_weather"], "keypoints": ["降水|雨|伞", "概率|%"]},
+  {"id": "weather-03", "category": "天气", "input": "华山这几天适合爬山吗？", "expected_tools": ["get_weather"], "keypoints": ["华山|渭南|华阴", "°C|温度|气温"]},
+  {"id": "weather-04", "category": "天气", "input": "秋天去西安旅游穿什么衣服合适？", "expected_tools": ["get_clothing_advice"], "keypoints": ["外套|长袖|穿"]},
+  {"id": "weather-05", "category": "天气", "input": "这周末临潼的天气如何，看长恨歌会冷吗？", "expected_tools": ["get_weather"], "keypoints": ["°C|温度|气温", "冷|暖|外套|穿"]},
+  {"id": "weather-06", "category": "天气", "input": "延安壶口瀑布那边天气怎么样？", "expected_tools": ["get_weather"], "keypoints": ["°C|温度|气温"]},
+
+  {"id": "route-01", "category": "路线", "input": "从钟楼到兵马俑博物馆怎么走？", "expected_tools": ["plan_route"], "keypoints": ["路线|方案|分钟|公里|高德"]},
+  {"id": "route-02", "category": "路线", "input": "西安北站到宝鸡青铜器博物院怎么去？", "expected_tools": ["plan_route"], "keypoints": ["路线|方案|分钟|公里|高铁|高德"]},
+  {"id": "route-03", "category": "路线", "input": "大雁塔到大唐不夜城步行远吗？", "expected_tools": ["plan_route"], "keypoints": ["步行|分钟|公里|路线|近"]},
+  {"id": "route-04", "category": "路线", "input": "回民街在西安哪个位置？", "expected_tools": ["search_place"], "keypoints": ["回民街|北院门|莲湖|位置|地址"]},
+  {"id": "route-05", "category": "路线", "input": "钟楼附近有什么酒店推荐？", "expected_tools": ["search_place"], "keypoints": ["酒店|住宿"]},
+  {"id": "route-06", "category": "路线", "input": "自驾从西安市区到华山要多久？", "expected_tools": ["plan_route"], "keypoints": ["驾车|分钟|小时|公里|路线"]},
+
+  {"id": "kb-01", "category": "知识", "input": "何尊为什么被称为镇馆之宝？", "expected_tools": ["search_knowledge"], "keypoints": ["宅兹中国|中国", "铭文", "西周"]},
+  {"id": "kb-02", "category": "知识", "input": "逨盘有什么历史价值？", "expected_tools": ["search_knowledge"], "keypoints": ["铭文|372", "世系|王|西周"]},
+  {"id": "kb-03", "category": "知识", "input": "兵马俑参观要注意什么？门票多少？", "expected_tools": ["search_knowledge"], "keypoints": ["120|门票", "讲解|导览|坑"]},
+  {"id": "kb-04", "category": "知识", "input": "陕西历史博物馆怎么预约？有什么必看的文物？", "expected_tools": ["search_knowledge"], "keypoints": ["预约|公众号", "玛瑙杯|银壶|皇后之玺|三彩|壁画"]},
+  {"id": "kb-05", "category": "知识", "input": "华山登山路线怎么选？", "expected_tools": ["search_knowledge"], "keypoints": ["索道|西峰|北峰", "长空栈道|夜爬|玉泉院"]},
+  {"id": "kb-06", "category": "知识", "input": "法门寺的佛指舍利是怎么回事？", "expected_tools": ["search_knowledge"], "keypoints": ["舍利", "地宫|唐代"]},
+  {"id": "kb-07", "category": "知识", "input": "什么时候去壶口瀑布最好？", "expected_tools": ["search_knowledge"], "keypoints": ["4|5|9|10|11|桃花汛|汛期|彩虹"]},
+  {"id": "kb-08", "category": "知识", "input": "西安有什么必吃的美食？", "expected_tools": ["search_knowledge"], "keypoints": ["泡馍|肉夹馍|面", "回民街|洒金桥"]},
+
+  {"id": "guide-01", "category": "讲解", "input": "我要带小学生团，兵马俑该怎么讲？", "expected_tools": ["generate_guide"], "keypoints": ["儿童|小学生|学生", "讲解|要点|策略"]},
+  {"id": "guide-02", "category": "讲解", "input": "帮我组织一段何尊的讲解词", "expected_tools": ["generate_guide"], "keypoints": ["何尊", "宅兹中国|铭文|讲解"]},
+  {"id": "guide-03", "category": "讲解", "input": "你现在能讲哪些景点和文物？", "expected_tools": ["list_guide_spots"], "keypoints": ["收录|素材|讲解"]},
+  {"id": "guide-04", "category": "讲解", "input": "外宾团来看逨盘，怎么讲比较合适？", "expected_tools": ["generate_guide"], "keypoints": ["外宾", "类比|翻译|讲解"]},
+
+  {"id": "mix-01", "category": "复合", "input": "帮我规划一个西安一日游行程", "expected_tools": ["search_knowledge"], "keypoints": ["兵马俑|华清宫|大雁塔|城墙|博物馆", "上午|下午|晚|D1|行程"]},
+  {"id": "mix-02", "category": "复合", "input": "只有一天时间，兵马俑和华清宫能一起玩吗？", "expected_tools": ["search_knowledge"], "keypoints": ["临潼|同线|一起|一天", "长恨歌|兵马俑|华清宫"]},
+  {"id": "mix-03", "category": "复合", "input": "西安三天怎么安排最经典？", "expected_tools": ["search_knowledge"], "keypoints": ["D1|D2|D3|第一|第二|第三", "兵马俑|博物馆|城墙|不夜城"]},
+  {"id": "mix-04", "category": "复合", "input": "周末带孩子去宝鸡玩两天，有什么建议？", "expected_tools": ["search_knowledge"], "keypoints": ["青铜器|博物院|法门寺", "行程|建议|安排"]},
+  {"id": "mix-05", "category": "复合", "input": "明天去华山，天气和装备上有什么要准备的？", "expected_tools": ["get_weather"], "keypoints": ["°C|温度|气温|天气", "外套|手套|装备|穿"]},
+  {"id": "mix-06", "category": "复合", "input": "我想请朋友吃西安特色，去哪吃、吃什么？", "expected_tools": ["search_knowledge"], "keypoints": ["泡馍|肉夹馍|面|回民街|洒金桥"]}
+]

@@ -42,6 +42,13 @@ def load_servers_config() -> dict:
                          for a in s["args"]]
             # 必须用当前解释器拉起 Server（配置里的 "python" 可能指向无依赖的系统 Python）
             s["command"] = sys.executable
+            # MCP stdio 默认只转发白名单环境变量（PATH 等），业务密钥必须显式注入子进程；
+            # 显式传 env 时会整体替换而非合并，所以先复制完整环境再注入
+            amap_key = os.getenv("AMAP_KEY")
+            if amap_key:
+                merged = dict(os.environ)
+                merged["AMAP_KEY"] = amap_key
+                s["env"] = merged
     return cfg
 
 

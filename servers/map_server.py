@@ -36,19 +36,20 @@ async def _geocode(place: str, city: str = "") -> tuple[float, float, str] | Non
 
 
 @mcp.tool()
-async def plan_route(origin: str, destination: str, mode: str = "transit") -> str:
+async def plan_route(origin: str, destination: str, mode: str = "transit", city: str = "西安") -> str:
     """规划两个地点之间的出行路线。用户问"怎么去/怎么走/从A到B/路线/交通"时使用。
 
     Args:
         origin: 出发地，如 "西安北站"、"钟楼"
         destination: 目的地，如 "秦始皇兵马俑博物馆"、"宝鸡青铜器博物院"
         mode: 出行方式：transit(公交地铁，默认) / driving(驾车) / walking(步行，3公里内合适)
+        city: 出发地所在城市（用于消除同名地名歧义，如"钟楼"全国有多处），默认 "西安"；跨城出行时填出发城市
     """
     if not _key():
         return NO_KEY_MSG
     try:
-        o = await _geocode(origin)
-        t = await _geocode(destination)
+        o = await _geocode(origin, city)  # 出发地带城市约束，防止"钟楼"匹配到常州等同名地
+        t = await _geocode(destination)   # 目的地不约束，支持跨城（如西安→宝鸡）
         if not o:
             return f"未找到出发地「{origin}」，请换更精确的写法（如加城市名）"
         if not t:
@@ -81,7 +82,7 @@ async def plan_route(origin: str, destination: str, mode: str = "transit") -> st
             # transit 公交
             r = await c.get(f"{BASE}/v3/direction/transit/integrated",
                             params={"origin": olnglat, "destination": tlnglat,
-                                    "city": "西安", "cityd": "西安", "key": _key()})
+                                    "city": city, "cityd": city, "key": _key()})
             transits = r.json().get("route", {}).get("transits") or []
             if not transits:
                 return "未规划出公交路线（可尝试 mode=driving 查询驾车方案）"

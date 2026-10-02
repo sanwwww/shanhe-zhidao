@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """单元测试（全部不调 LLM，零成本）：python -m pytest tests/ -v"""
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -22,18 +23,18 @@ def test_kb_built():
 
 def test_kb_hezun_hit():
     """"何尊/宅兹中国" 查询必须命中何尊条目（混合检索质量红线）"""
-    r = search_knowledge("何尊 中国一词最早的记载")
+    r = asyncio.run(search_knowledge("何尊 中国一词最早的记载"))
     assert "何尊" in r and "宅兹中国" in r
 
 
 def test_kb_bingmayong_hit():
-    r = search_knowledge("兵马俑参观攻略门票")
+    r = asyncio.run(search_knowledge("兵马俑参观攻略门票"))
     assert "兵马俑" in r
 
 
 def test_kb_graceful_on_garbage():
     """乱 query 也不能抛异常（RAG 是增强不是依赖）"""
-    r = search_knowledge("asdfghjkl12345")
+    r = asyncio.run(search_knowledge("asdfghjkl12345"))
     assert isinstance(r, str) and len(r) > 0
 
 

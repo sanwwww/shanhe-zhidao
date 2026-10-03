@@ -5,6 +5,7 @@
 - SSE 事件协议与 Ops Agent 一致：status / delta / tool_start / tool_result / done / error
 - 安全：每 IP 滑动窗口限流 30 次/分、消息 ≤500 字、request_id 全链路追踪
 - 可靠性：90s 墙钟熔断 + ReAct 步数上限 + 断连即停 + 异常不回传堆栈
+  + MCP 会话断线自愈（异常触发重建 + 60s 健康巡检兜底）
 跑法：python api_server.py  （默认 http://127.0.0.1:8001）
 """
 import asyncio
@@ -21,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
-from agent_core import ROOT, create_app_agent
+from agent_core import ROOT, AgentHolder, is_session_broken
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("shanhe")
@@ -46,12 +47,16 @@ def _rate_ok(ip: str) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 应用启动时初始化 MCP 连接和 Agent；关闭时清理资源
-    async with create_app_agent() as (agent, tools):
-        app.state.agent = agent
-        app.state.tool_names = [t.name for t in tools]
-        print(f"[山河智导] Agent 就绪，接入工具：{app.state.tool_names}")
+    # 应用启动时初始化 MCP 会话与 Agent；关闭时清理资源
+    holder = AgentHolder()
+    await holder.start()          # 内含常驻 supervisor task（会话的建立/关闭都在它里面）
+    app.state.holder = holder
+    print(f"[山河智导] Agent 就绪，接入工具：{[t.name for t in holder.tools]}"
+          + (f"　未连上：{holder.failures}" if holder.failures else ""))
+    try:
         yield
+    finally:
+        await holder.aclose()
 
 
 app = FastAPI(title="山河智导 · 文旅导览 Agent", lifespan=lifespan)
@@ -141,6 +146,11 @@ async def chat_stream(req: ChatRequest, request: Request):
     ip = request.client.host if request.client else "unknown"
     if not _rate_ok(ip):
         return JSONResponse({"detail": "请求过于频繁，请稍后再试"}, status_code=429)
+    holder = getattr(request.app.state, "holder", None)
+    if holder is None or not holder.ready:
+        # 会话重建期间（几秒）没有可用 Agent：明确让用户稍后重试，
+        # 而不是把一个指向已关闭会话的旧 Agent 拿去撞墙
+        return JSONResponse({"detail": "正在重置工具连接，请 5 秒后重试"}, status_code=503)
     msg = req.message.strip()
     if not msg or len(msg) > MAX_MSG_LEN:
         return JSONResponse({"detail": f"消息不能为空且不超过{MAX_MSG_LEN}字"}, status_code=400)
@@ -155,7 +165,8 @@ async def chat_stream(req: ChatRequest, request: Request):
 
         try:
             yield _sse("status", {"stage": "connecting", "request_id": request_id})
-            stream = app.state.agent.astream_events(
+            # 每次请求现取 agent：会话重建后新请求自动用上新的一套
+            stream = holder.agent.astream_events(
                 {"messages": [HumanMessage(content=msg)]},
                 {"configurable": {"thread_id": thread_id}, "recursion_limit": MAX_STEPS * 2 + 1},
                 version="v2",
@@ -192,8 +203,17 @@ async def chat_stream(req: ChatRequest, request: Request):
             yield _sse("error", {"answer": f"响应超过 {TOTAL_TIMEOUT} 秒已中断，请简化问题后重试。",
                                  "request_id": request_id})
         except Exception as e:
-            log.exception("[%s] chat failed: %s", request_id, e)   # 详情只进服务端日志
-            yield _sse("error", {"answer": "服务暂时不可用，请稍后重试。", "request_id": request_id})
+            if is_session_broken(e):
+                # MCP 会话已断：后台重建整套会话，本次如实告知用户重试一次即可
+                log.warning("[%s] MCP 会话断开（%s），已触发后台重建",
+                            request_id, type(e).__name__)
+                app.state.holder.trigger_rebuild()
+                yield _sse("error", {"answer": "工具连接已重置，请重试一次。",
+                                     "request_id": request_id})
+            else:
+                log.exception("[%s] chat failed: %s", request_id, e)   # 详情只进服务端日志
+                yield _sse("error", {"answer": "服务暂时不可用，请稍后重试。",
+                                     "request_id": request_id})
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"X-Request-ID": request_id, "Cache-Control": "no-cache"})
@@ -201,8 +221,23 @@ async def chat_stream(req: ChatRequest, request: Request):
 
 @app.get("/health")
 async def health(request: Request):
-    return {"status": "ok", "service": "shanhe-zhidao",
-            "tools": getattr(request.app.state, "tool_names", [])}
+    """健康检查。/health 是人（和监控）用来判断"它还活着吗"的入口，
+    所以要把"会话有没有断过、有没有 Server 没连上"一起暴露出来——
+    否则只能看到 status: ok 却不知道工具其实已经失效。"""
+    holder = getattr(request.app.state, "holder", None)
+    if holder is None:
+        return JSONResponse({"status": "starting", "service": "shanhe-zhidao"}, status_code=503)
+    if not holder.ready:
+        # 正在重建会话：明确区别于"健康"，否则监控会以为一切正常
+        return JSONResponse({"status": "recovering", "service": "shanhe-zhidao",
+                             "session_rebuilds": holder.rebuilds}, status_code=503)
+    return {
+        "status": "ok",
+        "service": "shanhe-zhidao",
+        "tools": [t.name for t in holder.tools],
+        "unavailable_servers": holder.failures,   # 非空即说明某个 Server 的工具当前不可用
+        "session_rebuilds": holder.rebuilds,      # 会话重建次数：持续增长 = 子进程反复挂
+    }
 
 
 # 静态前端（放最后，避免覆盖 API 路由）

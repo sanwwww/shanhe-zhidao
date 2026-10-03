@@ -34,13 +34,51 @@ python api_server.py        # Web 模式 → http://127.0.0.1:8001
 ## 质量保障
 
 ```bash
-python -m pytest tests/ -v      # 单元测试 111 项（零 LLM 成本，含检索首位命中回归）
+python -m pytest tests/ -v      # 单元测试 125 项（零 LLM 成本，含检索首位命中与会话生命周期守卫）
 python smoke_test.py            # 工具层冒烟（零 LLM 成本）
 python smoke_test.py --full     # +一次真实 Agent 全链路
 python evaluate.py              # 57 条评估集跑批（真实 LLM，含 token/成本统计）
 python evaluate.py --category 对抗   # 只跑某一类；--ids / --limit 同理
 python evaluate.py --report-from-results   # 零成本复判：改判据后自证没把标准写松
+python bench_concurrency.py --level direct --n 4   # 并发基线：绕过 MCP 直接调工具（零成本）
+python bench_concurrency.py --level mcp    --n 4   # 并发基线：经 MCP 调用（零成本）
+python bench_concurrency.py --level e2e --rounds 2 # 端到端固定题集 A/B（真实 LLM）
 ```
+
+## 性能与会话管理（实测数据）
+
+MCP 客户端最初用的是 `client.get_tools()`。它的 docstring 明写 **“A new session will be created for each tool call”**——也就是每次工具调用都要重开 stdio 子进程、重新 import 整个依赖栈。实测下来，这把一次 0.2 秒的检索拖成了 3.67 秒。
+
+| 方式 | 单次工具调用 | 说明 |
+| --- | --- | --- |
+| `get_tools()`（每次新建会话） | **3.670s** | 其中约 3.45s 纯粹是建会话开销 |
+| 复用一条长期会话 | **0.209s** | 快 **17.6 倍** |
+
+同题端到端 A/B（`bench_concurrency.py --level e2e --rounds 2`，两边工具调用次数完全一致，不是靠少调工具换速度）：
+
+| 场景 | 改前 | 改后 |
+| --- | --- | --- |
+| 纯对话（不调工具，纯 LLM） | 2.42 / 2.34s | 2.06 / 2.15s |
+| 知识检索（1 工具） | 6.52 / 6.69s | 3.16 / 4.11s |
+| 路线（1 工具） | 5.18 / 5.15s | 3.39 / 3.41s |
+| 复合行程（3 工具） | 11.55 / 10.53s | 8.00 / 7.21s |
+| **均值 / P50** | **6.50s / 6.61s** | **4.49s / 3.76s（−31% / −43%）** |
+
+代价是**长期会话一断就全断**（实测 `taskkill` 掉 stdio 子进程后，每次工具调用都立即抛 `anyio.ClosedResourceError`），所以配套做了自愈：
+
+- 每个 Server 一条长期会话，**会话的建立与关闭只在一个常驻 supervisor task 里发生**
+- 请求路径发现链路异常 → 后台重建 + 明确提示「工具连接已重置，请重试一次」
+- 60 秒健康巡检兜底（连续两次 ping 失败才重建）——因为断在**工具调用内部**的会话会被 MCP 包成 `ToolMessage` 交给模型自纠，异常根本冒不到 API 层
+- 重建窗口内 `/health` 返回 `503 recovering`，而不是假装 `ok`（监控才不会以为一切正常）
+
+实测验收（杀掉 weather server 子进程）：首次请求收到明确提示 → 8.8 秒后重建完成 → 重试同一问题**完全恢复**，服务端日志无 `CancelledError` / `RuntimeError`。
+
+> **两个用事故换来的约束**，已用守卫测试钉死在 `tests/test_session_lifecycle.py`：
+>
+> 1. **重建必须先关旧会话、再建新会话**。anyio 要求 cancel scope 后进先出退出；反过来会抛 `RuntimeError: Attempted to exit a cancel scope that isn't the current task’s current cancel scope`，并且**连带把新会话一起弄死**——表现是"重建计数正常增长、`/health` 显示工具齐全、没有不可用 Server，但此后所有工具调用永久失败"。也就是自愈代码把服务治死了。
+> 2. **会话的建立/关闭不能放在临时 task 里**。第一版把重建放进 `asyncio.create_task`，anyio 取消了一个不属于该 task 的 cancel scope，而那个 scope 恰好是 uvicorn lifespan 所在的外层 scope——整个应用被送进 shutdown 流程。
+>
+> 这两条都是"不看日志就完全看不出来"的失效模式，所以守卫测试用静态断言钉顺序，不指望后来者从注释里读懂。
 
 ## 评测设计
 

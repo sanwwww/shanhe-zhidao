@@ -99,7 +99,8 @@ async def plan_route(origin: str, destination: str, mode: str = "transit", city:
                     f"全程约 {dur//60} 分钟，票价约 {t0.get('cost', '?')} 元\n"
                     f"换乘路径：{' → '.join(segs)}")
     except Exception as e:
-        return f"路线查询失败：{e}。建议直接使用高德地图 App 查询。"
+        # 见 weather_server 同名注释：网络异常的 str(e) 可能是空串
+        return f"路线查询失败（{type(e).__name__}：{str(e).strip() or '无详情'}）。建议直接使用高德地图 App 查询。"
 
 
 @mcp.tool()
@@ -125,7 +126,7 @@ async def search_place(keyword: str, city: str = "西安") -> str:
             lines.append(f"  · {p['name']}｜{p.get('type', '').split(';')[0]}｜{p.get('address', '地址不详')}")
         return "\n".join(lines)
     except Exception as e:
-        return f"地点搜索失败：{e}"
+        return f"地点搜索失败（{type(e).__name__}：{str(e).strip() or '无详情'}）"
 
 
 if __name__ == "__main__":

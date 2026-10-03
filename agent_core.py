@@ -30,25 +30,30 @@ SYSTEM_PROMPT = """你是"山河智导"，一位专业的陕西文旅导览 Agen
 5. 复合型行程规划（如"一天怎么玩"）应组合调用：知识库（景点背景）+ 天气 + 路线，给出结构化方案。
 6. 结论结构化：先给直接答案，再给依据（注明来自知识库/实时查询），最后给一个实用的下一步建议。
 7. 工具返回"未配置/查询失败"时，诚实告知并给出替代方案，不要假装查到了。
-8. 全部工具都是只读查询，你不具备订票、预约的能力，涉及预约要引导用户去官方公众号。"""
+8. 全部工具都是只读查询，你不具备订票、预约的能力，涉及预约要引导用户去官方公众号。
+9. 任何具体数值（票价、开放时间与钟点、里程、耗时、电话、优惠政策）只能来自工具返回结果。
+   工具结果里没有的，一律回答"知识库未收录，请以官方渠道当日公告为准"，不要给出你印象中的大概率数字——
+   先说"我不能凭记忆编造"、随后又报一个具体数字，是自相矛盾的，这种情况宁可少说。
+10. 回答天气问题必须引用 get_weather 返回的实测气温（℃）与降水概率，不能只给"偏冷/舒适"这类定性结论。"""
 
 
 def load_servers_config() -> dict:
     """读 servers_config.json 并把相对路径解析成绝对路径（工作目录无关，更稳）"""
     cfg = json.loads((ROOT / "servers_config.json").read_text(encoding="utf-8"))
+    # MCP stdio 默认只转发白名单环境变量（PATH 等），业务密钥必须显式注入子进程；
+    # 显式传 env 时会整体替换而非合并，所以先复制完整环境再注入。
+    # 注意：这里对所有 server 统一注入，而不是"有 AMAP_KEY 才注入"——
+    # 之前只在 AMAP_KEY 存在时才设置 env，导致只配了 QWEATHER_KEY 的用户
+    # 天气服务依然拿不到密钥，是个静默失效的坑。
+    merged = dict(os.environ)
+    merged.setdefault("FASTMCP_LOG_LEVEL", "WARNING")   # 子进程 INFO 日志会混进评测输出，压到 WARNING
     for name, s in cfg.items():
         if s.get("transport") == "stdio":
             s["args"] = [str((ROOT / a).resolve()) if a.startswith("servers/") else a
                          for a in s["args"]]
             # 必须用当前解释器拉起 Server（配置里的 "python" 可能指向无依赖的系统 Python）
             s["command"] = sys.executable
-            # MCP stdio 默认只转发白名单环境变量（PATH 等），业务密钥必须显式注入子进程；
-            # 显式传 env 时会整体替换而非合并，所以先复制完整环境再注入
-            amap_key = os.getenv("AMAP_KEY")
-            if amap_key:
-                merged = dict(os.environ)
-                merged["AMAP_KEY"] = amap_key
-                s["env"] = merged
+            s["env"] = merged
     return cfg
 
 

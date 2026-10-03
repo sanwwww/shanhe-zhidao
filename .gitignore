@@ -4,3 +4,4 @@ __pycache__/
 chroma_db/
 .pytest_cache/
 evaluation/evaluation_results.json
+eval_run*.log

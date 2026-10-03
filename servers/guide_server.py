@@ -27,8 +27,8 @@ AUDIENCE_TIPS = {
 }
 
 
-def _load_entries() -> list[tuple[str, str]]:
-    """语料 → [(标题, 正文)]，与知识库切块逻辑一致（按 '## ' 标题）"""
+def _load_entries() -> list[tuple[str, str, str]]:
+    """语料 → [(标题, 正文, 来源文件)]，与知识库切块逻辑一致（按 '## ' 标题）"""
     entries = []
     for md in sorted(KNOWLEDGE_DIR.glob("*.md")):
         text = md.read_text(encoding="utf-8")
@@ -36,8 +36,19 @@ def _load_entries() -> list[tuple[str, str]]:
             chunk = chunk.strip()
             if chunk.startswith("## ") and len(chunk) > 30:
                 title = chunk.splitlines()[0].lstrip("# ").strip()
-                entries.append((title, chunk))
+                entries.append((title, chunk, md.stem))
     return entries
+
+
+def _grouped_overview(entries) -> str:
+    """按来源文件分组生成目录（语料从 18 条扩到 90+ 后，一次性列全会挤爆上下文）"""
+    groups: dict[str, list[str]] = {}
+    for title, _, src in entries:
+        groups.setdefault(src, []).append(title.split("（")[0])
+    lines = []
+    for src, titles in groups.items():
+        lines.append(f"  【{src}】{len(titles)} 条：{'、'.join(titles)}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -50,12 +61,12 @@ def generate_guide(spot: str, audience: str = "通用") -> str:
     """
     entries = _load_entries()
     q = spot.strip()
-    # 标题精确命中优先，其次正文包含
-    hit = next(((t, b) for t, b in entries if q in t), None) or \
-          next(((t, b) for t, b in entries if q in b), None)
+    # 标题精确命中优先，其次正文包含（按正文包含时取标题最短的，避免"西安美食"这类高频词误匹配到长条目）
+    hit = next(((t, b) for t, b, _ in entries if q in t), None) or \
+          next(((t, b) for t, b, _ in entries if q in b), None)
     if not hit:
-        known = "、".join(t.split("（")[0] for t, _ in entries[:12])
-        return f"知识库暂未收录「{spot}」的讲解素材。已收录：{known} 等。"
+        return (f"知识库暂未收录「{spot}」的讲解素材（共收录 {len(entries)} 条）。"
+                f"可讲范围：\n{_grouped_overview(entries)}")
     title, body = hit
     tip = AUDIENCE_TIPS.get(audience, AUDIENCE_TIPS["通用"])
     # 压缩正文为要点（按句号取前几句，保留信息密度最高的开头）
@@ -69,9 +80,11 @@ def generate_guide(spot: str, audience: str = "通用") -> str:
 
 @mcp.tool()
 def list_guide_spots() -> str:
-    """列出知识库中已收录讲解素材的全部景点/文物。用户问"你能讲哪些景点/文物"时使用。"""
-    titles = [t for t, _ in _load_entries()]
-    return "📚 已收录讲解素材：\n" + "\n".join(f"  · {t}" for t in titles)
+    """列出知识库中已收录讲解素材的景点/文物范围（按主题分组）。用户问"你能讲哪些景点/文物"时使用。"""
+    entries = _load_entries()
+    return (f"📚 已收录讲解素材共 {len(entries)} 条，按主题分组：\n"
+            f"{_grouped_overview(entries)}\n"
+            f"💡 可直接指定其中任一条目生成讲解词，也可说明观众类型（儿童/学生/亲子/老年/外宾/历史爱好者）。")
 
 
 if __name__ == "__main__":

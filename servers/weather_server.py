@@ -74,7 +74,9 @@ async def get_weather(city: str) -> str:
             )
         return "\n".join(lines)
     except Exception as e:
-        return f"天气查询失败：{e}。请稍后重试或换个地名。"
+        # 网络类异常（如 httpx.ConnectError）的 str(e) 常常是空串，
+        # 只写 {e} 会得到"天气查询失败：。请稍后重试"这种无法定位的提示
+        return f"天气查询失败（{type(e).__name__}：{str(e).strip() or '无详情'}）。请稍后重试或换个地名。"
 
 
 async def _qweather(city: str) -> str:

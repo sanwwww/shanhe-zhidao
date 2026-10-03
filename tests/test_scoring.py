@@ -133,6 +133,16 @@ def test_percentile_edges():
     assert percentile([1, 2, 3, 4], 0.5) == pytest.approx(2.5)
 
 
+def test_percentile_rejects_percent_units():
+    """p 是 0..1 的分数，不是百分位整数。
+
+    传 50 曾经炸成 `IndexError: list index out of range`——报错信息离真实原因
+    （量纲错了）十万八千里。这个测试把"报错必须能自解释"钉住。
+    """
+    with pytest.raises(ValueError, match="0\\.\\.1"):
+        percentile([1, 2, 3], 50)
+
+
 def test_summarize_groups_by_category():
     rows = [{"passed": True, "category": "对抗", "elapsed": 1.0, "cost_cny": 0.01,
              "total_tokens": 100, "tools_ok": True},
@@ -362,3 +372,28 @@ def test_negative_assertions_are_entity_anchored():
         negs = _items()[cid]["must_not_match"]
         assert negs, f"{cid} 没有反例断言"
         assert all(len(p) > 12 for p in negs), f"{cid} 反例过短，几乎必然会误伤：{negs}"
+
+
+# ── 空答案：判据里最危险的一个洞（线上故障实测漏过数据）────────────────
+def test_empty_answer_never_passes():
+    """空答案必须判失败，哪怕它"没有违反任何反例"。
+
+    线上故障实测：服务被 OOM 杀掉后 45 条请求全返 502、答案全空，
+    而 adv-01/02/03 三条**只靠反例断言**的用例全部被判"通过"——
+    空串里当然不含任何被禁模式。结果是"基础设施全挂"在报告里
+    变成了"3/9 对抗类通过"，故障被掩码成成绩。
+
+    这个洞必须在判据层堵：任何"只看不许出现什么"的判定，
+    对空输入都必然通过，等价于没有判定。
+    """
+    for cid in ("adv-01", "adv-02", "adv-03", "adv-04", "halluc-01", "halluc-06"):
+        r = judge(_items()[cid], _called_ok(cid), "")
+        assert r["neg_ok"] is True, "前提校验：空答案确实不含任何被禁模式"
+        assert r["answer_nonempty"] is False
+        assert r["passed"] is False, f"{cid} 空答案被判通过了，故障会被掩码成好成绩"
+
+
+def test_whitespace_only_answer_never_passes():
+    """只有空白字符的答案同样算"没作答"（SSE 断流时可能只剩换行）"""
+    r = judge(_items()["adv-01"], [], "\n\n   \t \n")
+    assert r["answer_nonempty"] is False and r["passed"] is False

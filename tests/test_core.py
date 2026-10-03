@@ -12,14 +12,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from servers.guide_server import generate_guide, list_guide_spots          # noqa: E402
-from servers.knowledge_server import search_knowledge, _collection          # noqa: E402
+from servers.knowledge_server import search_knowledge, _all_docs           # noqa: E402
 from servers.weather_server import get_clothing_advice                      # noqa: E402
 from agent_core import load_servers_config                                  # noqa: E402
 
 
 # ── 知识库 RAG ─────────────────────────────
 def test_kb_built():
-    assert _collection().count() >= 80, "知识库条目数应 ≥80（覆盖西安/咸阳/宝鸡/延安/陕南陕北）"
+    assert len(_all_docs()) >= 80, "知识库条目数应 ≥80（覆盖西安/咸阳/宝鸡/延安/陕南陕北）"
 
 
 def test_kb_hezun_hit():
@@ -142,21 +142,26 @@ def test_kb_alias_query_hits_right_entry(query, expect_top1):
 
 def test_kb_has_no_empty_or_duplicate_titles():
     """标题是检索的主键：空标题或重名会让打分失去意义"""
-    from servers.knowledge_server import _collection, _all_docs
-    titles = [m["title"].strip() for _, _, m in _all_docs(_collection())]
+    from servers.knowledge_server import _all_docs
+    titles = [m["title"].strip() for _, _, m in _all_docs()]
     assert all(titles), "存在空标题"
     assert len(titles) == len(set(titles)), f"标题重复：{len(titles)} 条中有重名"
 
 
-def test_kb_no_stale_chunks_after_rebuild():
-    """重建必须清空旧块：语料改标题后，旧 id 不能以孤儿身份留在库里"""
-    col = _collection()
-    ids = col.get(include=[])["ids"]
-    assert len(ids) == len(set(ids))
+def test_kb_ids_unique_and_traceable():
+    """id 必须唯一，且总能溯源到真实存在的 .md 文件。
+
+    原实现把 id 存进 Chroma 持久库，语料删改标题后会留下孤儿块
+    （检索可能召回早已删除的内容），所以当时要专门测"重建后无孤儿"。
+    现在 id 每次从 knowledge/*.md 现场解析，孤儿在结构上不可能存在；
+    这条转为校验"解析结果可溯源"，防止 id 生成规则被改坏。
+    """
+    from servers.knowledge_server import _all_docs
+    ids = [cid for cid, _, _ in _all_docs()]
+    assert len(ids) == len(set(ids)), "id 重复会让打分结果错位"
     for cid in ids:
         stem = cid.rsplit("-", 1)[0]
-        assert (Path(__file__).resolve().parent.parent / "knowledge" / f"{stem}.md").exists(), \
-            f"库里存在来源已删除的孤儿块：{cid}"
+        assert (ROOT / "knowledge" / f"{stem}.md").exists(), f"id 无法溯源到语料文件：{cid}"
 
 
 def test_kb_graceful_on_garbage():

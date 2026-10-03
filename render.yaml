@@ -5,7 +5,9 @@ services:
     name: shanhe-zhidao
     runtime: python
     plan: free
-    # 建库放 Build 阶段：首次构建下载约 79MB embedding 模型，之后镜像缓存
+    # 建库步骤保留：现在只做"语料可解析、条目非空"的校验，不下载任何模型。
+    # （原先这一步会下载约 79MB embedding 模型并预建向量索引；该依赖已移除，
+    #   原因见 README「一次真实的生产故障」——它会在 512MB 实例上触发 OOM。）
     buildCommand: pip install -r requirements.txt && python servers/knowledge_server.py --build
     # --workers 1 是硬要求：MemorySaver 是进程内存态，多 worker 会让同一 thread_id
     # 的请求随机落到不同进程，多轮记忆直接丢失且难以排查

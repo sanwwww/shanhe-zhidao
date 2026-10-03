@@ -144,7 +144,8 @@ class AgentHolder:
         self._sessions: dict = {}
         self._cmds: asyncio.Queue = asyncio.Queue()
         self._task: asyncio.Task | None = None
-        self._rebuilds = 0
+        self._builds = 0
+        self._recoveries = 0
         self._health_interval = health_interval
         self._ping_failures: dict[str, int] = {}
 
@@ -171,8 +172,25 @@ class AgentHolder:
         return list(self._failures)
 
     @property
-    def rebuilds(self) -> int:
-        return self._rebuilds
+    def builds(self) -> int:
+        """成功建立会话的总次数。首次成立即为 1，不是 0。"""
+        return self._builds
+
+    @property
+    def recoveries(self) -> int:
+        """**自愈**重建次数：只有"在已有可用 Agent 的状态下重新建立"才 +1。
+
+        为什么要和 builds 分开：验收断线自愈时，若只有一个从 1 起步的总数，
+        看到 1 无法判断是"正常启动"还是"已经挂过一次并自愈"。分开口径后，
+        健康实例恒为 0，任何一次增长都等价于"确实自愈了一次"——这个指标才可自证。
+        """
+        return self._recoveries
+
+    def _note_build(self, was_ready: bool) -> None:
+        """记一次成功建立。`was_ready` = 建立之前是否已有可用 Agent。"""
+        self._builds += 1
+        if was_ready:
+            self._recoveries += 1
 
     async def start(self) -> None:
         """启动常驻会话管理 task，并等待首轮会话就绪。"""
@@ -231,8 +249,8 @@ class AgentHolder:
 
             try:
                 await self._rebuild_with_retry()
-                log.info("MCP 会话就绪（累计第 %d 次），可用工具 %d 个%s",
-                         self._rebuilds, len(self._tools),
+                log.info("MCP 会话就绪（累计建立 %d 次，其中自愈 %d 次），可用工具 %d 个%s",
+                         self._builds, self._recoveries, len(self._tools),
                          f"，未连上：{self._failures}" if self._failures else "")
             except BaseException as e:              # supervisor 绝不允许因单次失败而死掉
                 log.error("MCP 会话重建失败（%s：%s）", type(e).__name__, str(e) or "无详情")
@@ -260,6 +278,7 @@ class AgentHolder:
         请求会快速拿到"正在重置连接"的提示，而不是撞在一个半死的会话上。
         """
         # 先摘掉 Agent 与旧会话（这个顺序就是 LIFO）
+        was_ready = self._agent is not None      # 建立前是否已有可用 Agent → 决定算不算"自愈"
         self._agent = None
         self._tools = []
         await self._close_sessions()
@@ -303,7 +322,7 @@ class AgentHolder:
         self._failures = failures
         self._sessions = sessions
         self._ping_failures = {}
-        self._rebuilds += 1
+        self._note_build(was_ready)
 
     async def _rebuild_with_retry(self, attempts: int = 3) -> None:
         """建立失败就退避重试：会话建不起来等于服务不可用，不能干等 60 秒巡检。"""

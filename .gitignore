@@ -1,9 +1,14 @@
 venv/
 __pycache__/
 .env
-chroma_db/
 .pytest_cache/
 evaluation/evaluation_results.json
 eval_run*.log
 server*.log
 bench_*.log
+live_verify*.log
+live_verify*.json
+
+# 向量库索引：2026-10-03 已从检索路径移除（它把生产环境打死了，见 README 故障复盘）。
+# 保留忽略规则只是为了兼容本地残留的旧目录，该目录现在可安全删除。
+chroma_db/

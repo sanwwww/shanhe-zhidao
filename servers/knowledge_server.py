@@ -2,11 +2,36 @@
 """
 山河智导 · 文旅知识库 MCP Server（RAG-as-MCP-Tool）
 - 把 RAG 检索封装成一个标准 MCP 工具：对 Agent 来说，知识库和天气、地图是同构的工具
-- 检索策略：全量打分（标题命中 ≫ 正文关键词命中 > 向量相似度），取 top3
-  为什么不做"向量 topN → 重排"：ChromaDB 默认 embedding 是英文模型 all-MiniLM-L6-v2，
-  对中文的语义区分度极差，实测向量 top10 里常常没有正确条目，重排再准也救不回来。
-  语料在百条量级，全量扫描成本可忽略（约 0.1-0.3s），召回有保证。
-- 空库自愈：首次检索发现库为空自动入库（部署到 Render 后容器磁盘会重置，必须有保险丝）
+- 检索策略：全量打分（标题被引用 ≫ 标题最长公共子串 > IDF 加权词命中），取 top3
+- 语料直接在进程内解析，**不引入任何向量库**。这不是简化，是止血，见下。
+
+为什么这里没有 ChromaDB / embedding
+-----------------------------------
+原本用 ChromaDB 存语料 + 默认英文 embedding（all-MiniLM-L6-v2）做"向量同分兜底"。
+2026-10-03 线上验收抓到：**任何一次 search_knowledge 都会把整个服务打死**——
+SSE 流既不给 done 也不给 error（说明不是 Python 异常，是进程被 SIGKILL），
+首次检索 16.5 秒后连接断掉，之后 45 次请求全部 502，直到 Render 拉起新实例。
+
+本机实测内存（psutil，单进程）：
+
+    裸解释器                                    21 MB
+    import knowledge_server                     62 MB
+    建 Chroma 集合（含 ONNX embedding 初始化）   107 MB
+    首次检索完成                               138 MB  ← 峰值 271 MB
+
+知识库是独立 MCP 子进程，它 peak 271MB，再叠加主进程（FastAPI+LangGraph）
+与另外 3 个 MCP 子进程，超过 Render 免费版 512MB 上限 → OOM kill。
+
+代价与收益完全不成比例：向量项在 _score 里权重只有 0.5，
+而标题信号 span²*5 最高可到 45+；语料本身在百条量级，早已全量驻留内存。
+也就是说，为了一个"同分兜底"项，付出的是整个服务在生产环境被随机制杀。
+
+去掉之后：无 onnxruntime（顺带消除它在非主线程初始化会段错误崩进程的隐患）、
+无磁盘索引、无懒加载、冷启动更快。检索质量由 tests/test_core.py 的
+首位命中用例守住——不靠"应该有影响不大"的口头保证。
+
+- 空库自愈：语料直接来自 knowledge/*.md，部署到新容器天然就是最新内容，
+  不再需要"容器磁盘重置 → 检测空库 → 重新入库"这条保险丝
 启动：python servers/knowledge_server.py
 """
 import math
@@ -18,42 +43,25 @@ from mcp.server.fastmcp import FastMCP
 
 ROOT = Path(__file__).resolve().parent.parent
 KNOWLEDGE_DIR = ROOT / "knowledge"
-CHROMA_DIR = ROOT / "chroma_db"
-COLLECTION = "shanhe_kb"
 MAX_CHARS = 2000   # 返回给模型的检索片段上限：知识库扩到 90+ 条后单条最长约 370 字，
                    # 3 条拼接最大约 1100 字；留到 2000 是为了不截断
-TOP_K = 3          # 最终返回给模型的条目数（打分已按"标题命中 ≫ 正文命中 > 向量"排序）
+TOP_K = 3          # 最终返回给模型的条目数（打分已按"标题命中 ≫ 正文命中"排序）
 MIN_SPAN = 2       # 相关度下限：标题与问题至少要共享 2 个连续汉字，才认为"问到了这个条目"
 
 mcp = FastMCP("knowledge")
 
-_client = None
-_col = None
 _docs = None       # 全量语料内存缓存（检索在全量上打分，见 _all_docs）
 _idf_cache = None  # 语料级 IDF 缓存（打分用，见 _idf）
 
 
-def _collection():
-    """懒加载 ChromaDB（首次调用才载入 embedding 模型，加快 Server 启动）"""
-    global _client, _col
-    if _col is None:
-        import chromadb
-        _client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-        _col = _client.get_or_create_collection(COLLECTION)
-        if _col.count() == 0:
-            _build(_col)  # 空库自愈保险丝
-    return _col
+def _parse_corpus() -> list[tuple[str, str, dict]]:
+    """把 knowledge/*.md 解析成 (id, 文档块, 元数据) 列表
 
-
-def _build(col) -> int:
-    """重建式入库：按 '## ' 二级标题切块（一个标题=一个完整知识点，语义不断裂）
-
-    先清空再写入（而不是 upsert）：upsert 只会新增/覆盖同 id 条目，
-    一旦知识库删改了标题（id 变化），旧块会以孤儿身份留在库里，
-    检索时可能召回早已删除的内容。重建就该是重建。
+    按 '## ' 二级标题切块：一个标题=一个完整知识点，语义不断裂。
+    切不出任何块就直接抛——空语料下检索会"诚实地"回未收录，
+    但那种正常态和故障态无法区分，宁可启动失败。
     """
-    global _docs, _idf_cache
-    docs, ids, metas = [], [], []
+    docs: list[tuple[str, str, dict]] = []
     for md in sorted(KNOWLEDGE_DIR.glob("*.md")):
         text = md.read_text(encoding="utf-8")
         for i, chunk in enumerate(re.split(r"(?m)^(?=## )", text)):
@@ -61,17 +69,18 @@ def _build(col) -> int:
             if len(chunk) < 30 or not chunk.startswith("## "):
                 continue
             title = chunk.splitlines()[0].lstrip("# ").strip()
-            docs.append(chunk)
-            ids.append(f"{md.stem}-{i}")
-            metas.append({"source": md.name, "title": title})
-    old = col.get(include=[])["ids"]
-    if old:
-        col.delete(ids=old)
-    if docs:
-        col.add(ids=ids, documents=docs, metadatas=metas)
-    _docs = None          # 缓存失效，下次检索重新拉全量
-    _idf_cache = None     # IDF 依赖语料统计，必须一起失效
-    return len(docs)
+            docs.append((f"{md.stem}-{i}", chunk, {"source": md.name, "title": title}))
+    if not docs:
+        raise RuntimeError(f"知识库为空或格式不符：{KNOWLEDGE_DIR} 未解析出任何条目")
+    return docs
+
+
+def _reload() -> int:
+    """重新解析语料并使缓存失效（等价于原来的"重建索引"）"""
+    global _docs, _idf_cache
+    _docs = _parse_corpus()
+    _idf_cache = None
+    return len(_docs)
 
 
 # 低信息量填充词：只从"查询"和"用于比对的标题"里剥离，不动语料正文。
@@ -147,15 +156,14 @@ def _title_heads(title: str) -> list[str]:
     return [p for p in re.split(r"[（）()、，,·与和及/｜|]", title) if p]
 
 
-def _score(query: str, doc: str, title: str, dist: float) -> float:
-    """混合打分：标题被问题引用 ≫ 标题最长公共子串（平方加权）> IDF 加权标题词命中 > 正文词命中 > 向量
+def _score(query: str, doc: str, title: str) -> tuple[float, int, float]:
+    """混合打分：标题被问题引用 ≫ 标题最长公共子串（平方加权）> IDF 加权标题词命中 > 正文词命中
 
     每个设计点都是实测踩坑之后定的：
 
-    ① 关键词是主信号，向量只当同分兜底。
-       ChromaDB 默认 embedding 是英文模型 all-MiniLM-L6-v2，对中文语义区分度极差——
-       实测纯向量 top10 里经常根本没有正确条目（"何尊""乾陵""杜虎符"全中招），
-       重排再准也救不回来。语料在百条量级，直接全量打分，召回有保证、耗时约 0.2s。
+    ① 关键词是主信号。语料在百条量级，直接全量打分，召回有保证、耗时约 0.2s。
+       曾经用向量相似度做同分兜底，现已移除——原因见模块文档（它把生产环境打死了），
+       而且权重只有 0.5，对排序基本无影响。
 
     ② 标题要按"共享连续片段长度"打分，而不是数命中了几个 n-gram。
        见 _lcs_len 的说明：n-gram 计数会被跨词伪词带偏。
@@ -182,14 +190,14 @@ def _score(query: str, doc: str, title: str, dist: float) -> float:
     q = _strip_filler(query)
     named = max((len(h) ** 2 * 3 for h in _title_heads(_strip_filler(title))
                  if q.startswith(h)), default=0.0)
-    return span * span * 5 + named + head * 2 + body + 0.5 * max(0.0, 1.0 - dist), span, named
+    return span * span * 5 + named + head * 2 + body, span, named
 
 
 def _idf() -> dict[str, float]:
     """语料级 IDF（缓存）：token 越稀有，区分度越高"""
     global _idf_cache
     if _idf_cache is None:
-        docs = _all_docs(_collection())
+        docs = _all_docs()
         df: dict[str, int] = {}
         for _, doc, meta in docs:
             for t in set(_tokens(doc)) | set(_tokens(meta["title"])):
@@ -199,16 +207,14 @@ def _idf() -> dict[str, float]:
     return _idf_cache
 
 
-def _all_docs(col) -> list[tuple[str, str, dict]]:
-    """全量语料（几十到几百条量级很小）：一次性拉进内存并缓存
+def _all_docs() -> list[tuple[str, str, dict]]:
+    """全量语料：进程内一次性解析并缓存（百条量级，内存开销可忽略）
 
-    检索改为在全量上打分后，候选不再是"向量 top10"，而是整库——
-    这直接解决了"目标条目没被召回就永远找不回来"的问题。
+    检索在全量上打分，候选是整库——这直接解决了"目标条目没被召回就永远找不回来"的问题。
     """
     global _docs
     if _docs is None:
-        got = col.get(include=["documents", "metadatas"])
-        _docs = list(zip(got["ids"], got["documents"], got["metadatas"]))
+        _docs = _parse_corpus()
     return _docs
 
 
@@ -219,18 +225,13 @@ async def search_knowledge(query: str) -> str:
     Args:
         query: 检索词，如 "何尊 中国一词"、"兵马俑 参观攻略"、"华山 路线"
     """
-    # 注意：必须是 async def —— FastMCP 会把 sync 工具丢进 anyio 工作线程执行，
-    # 而 onnxruntime（ChromaDB 内置 embedding）在非主线程初始化会直接段错误崩进程（实测踩坑）。
-    # async 工具在 Server 事件循环（主线程）执行，查询耗时约 0.1-0.3s，可接受。
+    # 仍是 async：FastMCP 对 sync 工具会丢进 anyio 工作线程执行，async 工具则留在
+    # Server 事件循环（主线程）。检索本身只有约 0.06s，留在主线程既省线程又不改语义。
+    # 历史上这里是为了绕开 onnxruntime 在工作线程初始化会段错误崩进程；
+    # 现在 onnxruntime 已经移除，但保持 async 的调用契约不变（smoke_test 与守卫测试都按 async 校验）。
     try:
-        col = _collection()
-        if col.count() == 0:
-            return "知识库暂时为空，请基于通用知识回答，并提示用户答案未经知识库校验。"
-        # 向量距离：全量取一遍，只用于同分兜底（英文 embedding 对中文区分度差，不作主信号）
-        res = col.query(query_texts=[query], n_results=col.count())
-        dists = dict(zip(res["ids"][0], res["distances"][0]))
-        scored = [(*_score(query, doc, meta["title"], dists.get(cid, 1.0)), doc, meta)
-                  for cid, doc, meta in _all_docs(col)]
+        docs = _all_docs()
+        scored = [(*_score(query, doc, meta["title"]), doc, meta) for _, doc, meta in docs]
         # 相关度下限：没有一条标题与问题共享 2 个连续汉字（也没被问题点名）→ 判定未收录。
         # 为什么必须有：打分函数永远会返回一个"最像的"，哪怕语料里根本没有这条。
         # 实测问"黄帝陵要不要去"（库内确实没有），首位返回的是《Biangbiang 面与陕西面条谱系》——
@@ -254,17 +255,16 @@ async def search_knowledge(query: str) -> str:
 async def rebuild_knowledge() -> str:
     """重建知识库索引（管理员操作用，普通用户问题不要调用本工具）。"""
     try:
-        col = _collection()
-        n = _build(col)
-        return f"知识库已重建，共 {n} 条知识。"
+        return f"知识库已重建，共 {_reload()} 条知识。"
     except Exception as e:
-        return f"重建失败：{e}"
+        return f"重建失败：{type(e).__name__}：{str(e).strip() or '无详情'}"
 
 
 if __name__ == "__main__":
-    if "--build" in sys.argv:  # 允许 python servers/knowledge_server.py --build 手动建库
-        _collection()
-        print(f"知识库就绪，共 {_col.count()} 条")
+    if "--build" in sys.argv:
+        # 保留这个入口只是为了不改动 Render 的 buildCommand（改 render.yaml 需要在
+        # 控制台重新同步 Blueprint，没必要为一行命令增加部署风险）。
+        # 现在它做的事：解析并校验语料可读、条目非空。
+        print(f"知识库就绪，共 {len(_parse_corpus())} 条")
     else:
-        _collection()  # 启动时在主线程预加载 embedding 模型（避免首个请求才初始化）
         mcp.run(transport="stdio")

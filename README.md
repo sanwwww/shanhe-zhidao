@@ -16,7 +16,7 @@ LangGraph ReAct Agent（create_react_agent + checkpointer 多轮记忆）
    │  MultiServerMCPClient 统一接入 ↓（stdio）
    ├── weather   天气/穿搭（Open-Meteo 免 Key，和风可选）
    ├── amap      高德路线规划/场所搜索（AMAP_KEY 可选，无 Key 优雅降级）
-   ├── knowledge 陕西文旅知识库 ★RAG-as-MCP-Tool（94 条语料，ChromaDB + 全量 IDF 打分，空库自愈）
+   ├── knowledge 陕西文旅知识库 ★RAG-as-MCP-Tool（94 条语料，进程内全量 IDF 打分，零外部索引）
    └── guide     讲解词生成（按观众类型：儿童/学生/亲子/老年/外宾/历史爱好者）
 ```
 
@@ -25,7 +25,7 @@ LangGraph ReAct Agent（create_react_agent + checkpointer 多轮记忆）
 ```bash
 pip install -r requirements.txt
 cp .env.example .env        # 填入 DEEPSEEK_API_KEY（必填）
-python servers/knowledge_server.py --build   # 预建知识库（首次会下载约 79MB embedding 模型）
+python servers/knowledge_server.py --build   # 校验知识库语料可解析（不下载任何模型）
 
 python client.py            # CLI 模式
 python api_server.py        # Web 模式 → http://127.0.0.1:8001
@@ -34,16 +34,27 @@ python api_server.py        # Web 模式 → http://127.0.0.1:8001
 ## 质量保障
 
 ```bash
-python -m pytest tests/ -v      # 单元测试 125 项（零 LLM 成本，含检索首位命中与会话生命周期守卫）
+python -m pytest tests/ -v      # 单元测试 132 项（零 LLM 成本，含检索首位命中、会话生命周期、资源预算守卫）
 python smoke_test.py            # 工具层冒烟（零 LLM 成本）
 python smoke_test.py --full     # +一次真实 Agent 全链路
 python evaluate.py              # 57 条评估集跑批（真实 LLM，含 token/成本统计）
 python evaluate.py --category 对抗   # 只跑某一类；--ids / --limit 同理
 python evaluate.py --report-from-results   # 零成本复判：改判据后自证没把标准写松
+python verify_live.py           # ★ 线上终验：真实 HTTP/SSE 打部署好的服务，复用同一套判据
+python verify_live.py --ids kb-01   # 只验一条；--category / --limit / --repeat 同理
 python bench_concurrency.py --level direct --n 4   # 并发基线：绕过 MCP 直接调工具（零成本）
 python bench_concurrency.py --level mcp    --n 4   # 并发基线：经 MCP 调用（零成本）
 python bench_concurrency.py --level e2e --rounds 2 # 端到端固定题集 A/B（真实 LLM）
 ```
+
+**`verify_live.py` 为什么不能由 `evaluate.py` 顶替**：后者在进程内直接跑 agent graph，
+绕过了整个 FastAPI 层——它判的答案不是用户看到的那份（线上有 `AnswerStreamFilter`
+丢弃中间轮次前言）、走不到 SSE 传输与生命周期路径、也压不到真实实例的 0.1 CPU / 512MB。
+判据仍复用 `evaluation/scoring.py` 的同一套 `judge()`：换尺子量等于没量。
+
+它还会把**传输层故障与模型答错严格分开**（HTTP 5xx / 服务重启 → 中止并返回退出码 2，
+不把 502 计成"模型失败"）。这条纪律不是洁癖，是 2026-10-03 线上故障教出来的，
+见下文"一次真实的生产故障"。
 
 ## 性能与会话管理（实测数据）
 
@@ -140,7 +151,7 @@ python evaluate.py --report-from-results   # 复判已存结果，输出翻转�
 ## 设计要点（面试口径）
 
 - **RAG 即 MCP 工具**：教程常见口径是"用 MCP 就不用 RAG"——本项目把知识库检索封装成独立 MCP Server，对 Agent 来说与天气、地图同构；检索挂了主流程照跑（增强不是依赖）。
-- **检索为什么不用"向量召回 + 重排"**：ChromaDB 默认 embedding 是英文模型 all-MiniLM-L6-v2，中文语义区分度极差——实测纯向量 top10 里经常**根本没有正确条目**（"何尊""乾陵""杜虎符"全中招），重排再准也救不回来。改为**全量打分**：标题被问题引用 ≫ 标题最长公共子串（平方加权）> IDF 加权标题词命中 > 正文词命中 > 向量。语料百条量级，全量扫描只要约 0.2s，召回有保证。
+- **检索完全不用向量库**（先试过，再删掉，理由有数据）：最初用 ChromaDB 的默认英文 embedding（all-MiniLM-L6-v2）做"向量同分兜底"，两个问题叠加——① 中文区分度极差，实测纯向量 top10 里经常**根本没有正确条目**（"何尊""乾陵""杜虎符"全中招），重排也救不回来；② 它把生产环境打死了（见下文"一次真实的生产故障"）。改为**全量打分**：标题被问题引用 ≫ 标题最长公共子串（平方加权）> IDF 加权标题词命中 > 正文词命中。语料百条量级，全量扫描 **约 2ms**，召回有保证。
 - **四个被实测逼出来的检索细节**：
   - **IDF 加权**。等权重时"乾陵门票和开放时间"会被《参考价与时效性提醒》抢走首位——它同时命中"门票/开放/时间"一串高频词。
   - **先剥填充词**（怎么/什么/多少/推荐…）。否则"华山夜爬怎么安排"会与《回民街、洒金桥与永兴坊怎么选》共享"怎么"这个 2 字片段，把通用条目抬到与"华山"同分。
@@ -153,3 +164,53 @@ python evaluate.py --report-from-results   # 复判已存结果，输出翻转�
 - **可靠性**：单次请求 90s 墙钟熔断；ReAct 步数上限 12；客户端断开即停止生成（不浪费 token）；异常详情只进服务端日志，不回传堆栈给用户。
 - **流式答案过滤**：ReAct 每轮工具调用前模型都会输出一段“前言”（实测会输出英文句子），按 `run_id` 分段识别并整段丢弃，只把最终答案段推给用户。不用长度阈值判断——实测前言可达 57 字符，阈值法无法可靠区分。
 - **边界**：无订票/预约能力；模型决策、代码执行；单 Agent 循环（不含任务规划/多 Agent）。
+
+## 一次真实的生产故障：一次检索打死整个服务
+
+2026-10-03 上线后做线上终验，57 条用例跑到第 13 条时崩了。
+
+**现象**：前 12 条（天气、路线）全部正常，第 13 条发起 `search_knowledge` 后，
+SSE 流既没有 `done` 也没有 `error`——16.5 秒后被硬掐断；此后 45 条请求全部 **502**，
+持续约 90 秒，直到平台拉起新实例（`/health` 的 `session_builds` 归零后重新计数）。
+
+**定位**：SSE 不给 `error` 事件是关键线索——代码里所有 Python 异常都会被 catch 并吐 `error`，
+所以不是应用层异常，**是进程被 SIGKILL**。再叠上"只有第一次检索出问题"，
+指向 ChromaDB 的懒加载 embedding 初始化。本机用 psutil 量出单进程曲线：
+
+| 阶段 | RSS | 峰值 |
+|---|---|---|
+| 裸解释器 | 21 MB | 21 MB |
+| import 知识 Server | 62 MB | 62 MB |
+| 建 Chroma 集合（含 ONNX embedding 初始化） | 107 MB | 107 MB |
+| 首次检索完成 | 138 MB | **271 MB** |
+
+知识库是独立 MCP 子进程，它 peak 271MB，再叠加主进程（FastAPI + LangGraph）
+与另外 3 个 MCP 子进程，**超过 Render 免费版 512MB 上限 → OOM kill**。
+
+**修复**：删掉 ChromaDB + onnxruntime，语料直接从 `knowledge/*.md` 进程内解析。
+依据不是"感觉够用"，而是它与收益严重不成比例：向量项在打分公式里权重只有 `0.5`，
+而标题信号 `span²×5` 最高可到 45+；语料本身早已全量驻留内存。
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| 单进程峰值 RSS | 271 MB | **64.6 MB**（−76%） |
+| 单次检索耗时 | ~0.2s | **~2ms** |
+| 测试套件耗时 | 12.97s | 4.57s |
+
+**为什么之前所有测试都没发现它**——这点比故障本身更值得说：
+
+1. 检索结果**完全正确**，57 条评测全绿。崩的不是逻辑，是内存。
+2. 单测/冒烟/评测都在**进程内**跑，永远叠加不出"主进程 + 4 个 MCP 子进程"的真实占用。
+3. 它只在 **512MB / 0.1 CPU** 的生产规模下发生，开发机内存充裕永远不复现。
+
+**于是补上三道防线**（都在 `tests/test_resource_guards.py`）：
+依赖白名单（AST 扫 import + 扫 `requirements.txt`）、
+子进程峰值内存预算（150MB，实测 64.6MB，留 2.3 倍余量）、
+以及把"空答案"写进判据——因为这次故障还暴露了评测自身的洞：
+服务全挂时答案全空，而**只靠反例断言的用例会被空答案平凡通过**
+（空串当然不含任何被禁模式），"基础设施全挂"在报告里一度呈现成"3/9 对抗类通过"。
+
+两个可直接迁移的结论：
+**① 能跑通 ≠ 能上生产**，资源约束必须显式断言，不能靠功能测试兜底；
+**② 评测必须先能区分"模型答错"和"基础设施挂了"**，否则故障会被掩码成成绩。
+

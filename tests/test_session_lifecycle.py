@@ -110,4 +110,20 @@ def test_holder_is_not_ready_before_start():
     assert holder.ready is False
     assert holder.tools == []
     assert holder.failures == []
-    assert holder.rebuilds == 0
+    assert holder.builds == 0
+    assert holder.recoveries == 0
+
+
+def test_first_build_is_not_a_recovery():
+    """/health 上的自愈计数必须从 0 起步，否则它无法自证。
+
+    这是个真实踩到的坑：改造前只有一个 `session_rebuilds`，而它把"首次建立"
+    也算进去，于是全新部署健康运行的实例也会显示 1。验收断线自愈时看到 1，
+    根本分不清是"正常启动"还是"已经挂过一次并自愈了"。
+    """
+    holder = AgentHolder()
+    holder._note_build(was_ready=False)          # 首次建立：是 build，不是 recovery
+    assert (holder.builds, holder.recoveries) == (1, 0)
+
+    holder._note_build(was_ready=True)           # 已有可用 Agent 时重建：这才是自愈
+    assert (holder.builds, holder.recoveries) == (2, 1)

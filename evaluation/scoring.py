@@ -73,11 +73,12 @@ def normalize(text: str) -> str:
 def judge(item: dict, called: list[str], answer: str) -> dict:
     """对单条用例做出通过判定
 
-    判定由四个互相独立的检查组成，任一不过即整体不过：
+    判定由五个互相独立的检查组成，任一不过即整体不过：
       ① 工具断言：expected_tools 必须全被调用；forbidden_tools 一个都不能被调用
       ② 正面断言：keypoints 按 keypoint_min 比例命中；must_match 必须全部命中
       ③ 反例断言：must_not_match 命中任意一条即失败（对抗/幻觉用例的主判据）
-      ④ 组合：passed = ① 且 ② 且 ③
+      ④ 非空：答案不能是空串
+      ⑤ 组合：passed = ① 且 ② 且 ③ 且 ④
 
     为什么要 ③：对抗与幻觉用例的正确行为是"拒绝 / 承认没收录"，
     用"必须命中某关键词"来表达既不可靠（拒绝的措辞千变万化），
@@ -89,9 +90,16 @@ def judge(item: dict, called: list[str], answer: str) -> dict:
     结果把"拒绝编造熊猫谷票价、但顺带引用了洋县朱鹮生态园的真实票价"
     判成了编造——那是合规回答。通用反例分不清"报了所问对象的价"和
     "报了别的对象的价"，所以改成对象锚定。
+
+    为什么要 ④（这个洞实测漏过数据）：只靠反例断言的用例，**空答案必然通过**——
+    空串里当然不含任何被禁模式。2026-10-03 线上验收时服务被 OOM 杀掉，
+    45 条请求全返 502、答案全空，其中 adv-01/02/03 三条纯反例用例被判"通过"，
+    于是"基础设施全挂"在报告里呈现成"3/9 对抗类通过"。**空答案不是合规，
+    是没作答**，必须在判据里显式排除，否则故障会被掩码成好成绩。
     """
     answer = normalize(answer)
     called = list(called or [])
+    answer_nonempty = bool(answer.strip())
     expected = list(item.get("expected_tools") or [])
     forbidden = list(item.get("forbidden_tools") or [])
 
@@ -126,7 +134,8 @@ def judge(item: dict, called: list[str], answer: str) -> dict:
         "missing_must_match": missing_must,
         "neg_ok": neg_ok,
         "violations": violations,
-        "passed": bool(tools_ok and kp_ok and pos_ok and neg_ok),
+        "answer_nonempty": answer_nonempty,
+        "passed": bool(tools_ok and kp_ok and pos_ok and neg_ok and answer_nonempty),
     }
 
 
@@ -156,7 +165,14 @@ def usage_from_messages(messages, price: dict | None = None) -> dict:
 
 
 def percentile(values: list[float], p: float) -> float:
-    """线性插值分位数（样本量小时比 nearest-rank 更稳）"""
+    """线性插值分位数（样本量小时比 nearest-rank 更稳）
+
+    `p` 是 **0..1 的分数**，不是百分位整数：要 P50 传 0.5，不是 50。
+    量纲传错时会直接炸出 `IndexError: list index out of range`——离"传错参数"
+    这个真实原因很远，排查得靠读源码。所以在入口就把话说清楚。
+    """
+    if not 0.0 <= p <= 1.0:
+        raise ValueError(f"p 必须是 0..1 的分数（收到 {p}；要 P50 请传 0.5 而不是 50）")
     if not values:
         return 0.0
     xs = sorted(values)

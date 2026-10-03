@@ -230,13 +230,17 @@ async def health(request: Request):
     if not holder.ready:
         # 正在重建会话：明确区别于"健康"，否则监控会以为一切正常
         return JSONResponse({"status": "recovering", "service": "shanhe-zhidao",
-                             "session_rebuilds": holder.rebuilds}, status_code=503)
+                             "session_builds": holder.builds,
+                             "session_recoveries": holder.recoveries}, status_code=503)
     return {
         "status": "ok",
         "service": "shanhe-zhidao",
         "tools": [t.name for t in holder.tools],
         "unavailable_servers": holder.failures,   # 非空即说明某个 Server 的工具当前不可用
-        "session_rebuilds": holder.rebuilds,      # 会话重建次数：持续增长 = 子进程反复挂
+        # 两个口径必须分开：builds 首次成立就是 1，拿它看不出自愈；
+        # recoveries 在健康实例上恒为 0，任何增长都等价于"确实自愈过一次"。
+        "session_builds": holder.builds,
+        "session_recoveries": holder.recoveries,
     }
 
 

@@ -63,12 +63,18 @@ def build_model() -> ChatOpenAI:
     )
 
 
+# 管理/写操作类工具：保留在 MCP Server 供运维单独调用，但不进入 Agent 可见工具列表。
+# 权限靠代码边界，不靠 prompt 约束模型“别调用”——prompt 是建议，列表剔除才是保证。
+HIDDEN_FROM_AGENT = {"rebuild_knowledge"}
+
+
 @asynccontextmanager
 async def create_app_agent():
     """异步上下文：连接 MCP → 取工具 → 建 Agent；退出时清理连接（FastAPI lifespan 同款思路）"""
     client = MultiServerMCPClient(load_servers_config())
     try:
-        tools = await client.get_tools()
+        all_tools = await client.get_tools()
+        tools = [t for t in all_tools if t.name not in HIDDEN_FROM_AGENT]
         checkpointer = MemorySaver()  # 生产可换 SqliteSaver/PostgresSaver，接口不变
         agent = create_react_agent(
             model=build_model(),

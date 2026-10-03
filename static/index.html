@@ -23,6 +23,7 @@ aside .sub{font-size:11px;color:var(--dim);line-height:1.6}
 .stat b{color:var(--acc2);font-family:"JetBrains Mono",monospace;font-size:16px;display:block;margin-top:4px}
 #newBtn{background:none;border:1px solid var(--acc);color:var(--acc);padding:8px;cursor:pointer;font-family:inherit;font-size:13px}
 #newBtn:hover{background:var(--acc);color:#062b1c}
+#newBtnMobile{display:none;background:none;border:1px solid var(--acc);color:var(--acc);padding:6px 14px;cursor:pointer;font-family:inherit;font-size:13px;align-self:flex-end;margin:12px 5vw 0;flex:none}
 #hist{flex:1;overflow-y:auto;font-size:12px}
 #hist div{padding:6px 8px;border-left:2px solid var(--line);margin-bottom:6px;color:var(--dim);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #hist div:hover,#hist div.on{border-color:var(--acc);color:var(--ink)}
@@ -48,7 +49,7 @@ main{flex:1;display:flex;flex-direction:column;height:100vh}
 #chips span:hover{border-color:var(--acc);color:var(--acc)}
 .typing::after{content:"▌";color:var(--acc);animation:blink 1s infinite}
 @keyframes blink{50%{opacity:0}}
-@media(max-width:760px){aside{display:none}#chat,#inputBar,#chips{padding-left:5vw;padding-right:5vw}}
+@media(max-width:760px){aside{display:none}#chat,#inputBar,#chips{padding-left:5vw;padding-right:5vw}#newBtnMobile{display:block}}
 </style>
 </head>
 <body>
@@ -61,6 +62,7 @@ main{flex:1;display:flex;flex-direction:column;height:100vh}
   <div id="hist"></div>
 </aside>
 <main>
+  <button id="newBtnMobile">＋ 新会话</button>
   <div id="chat"></div>
   <div id="chips">
     <span>给我讲讲何尊为什么重要</span>
@@ -91,10 +93,12 @@ function renderHist(){
 }
 renderHist();
 
-document.getElementById('newBtn').onclick=()=>{
+const newSession=()=>{
   threadId=null;localStorage.removeItem('sh_thread');
   chat.innerHTML='';renderHist();msgIn.focus();
 };
+document.getElementById('newBtn').onclick=newSession;
+document.getElementById('newBtnMobile').onclick=newSession;
 document.querySelectorAll('#chips span').forEach(s=>s.onclick=()=>{msgIn.value=s.textContent;send();});
 msgIn.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 sendBtn.onclick=send;
@@ -147,7 +151,9 @@ async function send(){
   }catch(e){body.textContent='⚠ 网络异常：'+e.message;}
   finally{body.classList.remove('typing');sendBtn.disabled=false;msgIn.focus();}
 }
-addMsg('山河智导','你好，我是山河智导 🏔\n\n我能帮你：**规划行程**、**查路线**、**看天气**、**讲文物**（依托陕西文旅知识库）。\n\n试试点下面的示例问题，或直接告诉我你想去哪玩。');
+const WELCOME='你好，我是山河智导 🏔\n\n我能帮你：**规划行程**、**查路线**、**看天气**、**讲文物**（依托陕西文旅知识库）。\n\n试试点下面的示例问题，或直接告诉我你想去哪玩。';
+const wm=addMsg('山河智导',WELCOME);
+wm.querySelector('.body').innerHTML=DOMPurify.sanitize(marked.parse(WELCOME));
 </script>
 </body>
 </html>

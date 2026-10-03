@@ -7,7 +7,11 @@ services:
     plan: free
     # 建库放 Build 阶段：首次构建下载约 79MB embedding 模型，之后镜像缓存
     buildCommand: pip install -r requirements.txt && python servers/knowledge_server.py --build
-    startCommand: uvicorn api_server:app --host 0.0.0.0 --port $PORT
+    # --workers 1 是硬要求：MemorySaver 是进程内存态，多 worker 会让同一 thread_id
+    # 的请求随机落到不同进程，多轮记忆直接丢失且难以排查
+    startCommand: uvicorn api_server:app --host 0.0.0.0 --port $PORT --workers 1
+    # 若 Blueprint 校验不识别 healthCheckPath，删掉本行，改到控制台 Health Check 里填 /health
+    healthCheckPath: /health
     envVars:
       - key: DEEPSEEK_API_KEY
         sync: false        # 在 Render 控制台手动填，绝不入库

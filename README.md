@@ -34,7 +34,7 @@ python api_server.py        # Web 模式 → http://127.0.0.1:8001
 ## 质量保障
 
 ```bash
-python -m pytest tests/ -v      # 单元测试 10 项（零 LLM 成本）
+python -m pytest tests/ -v      # 单元测试 18 项（零 LLM 成本）
 python smoke_test.py            # 工具层冒烟（零 LLM 成本）
 python smoke_test.py --full     # +一次真实 Agent 全链路
 python evaluate.py              # 30 条评估集跑批（真实 LLM，约几分钟）
@@ -45,5 +45,7 @@ python evaluate.py              # 30 条评估集跑批（真实 LLM，约几分
 - **RAG 即 MCP 工具**：教程常见口径是"用 MCP 就不用 RAG"——本项目把知识库检索封装成独立 MCP Server，对 Agent 来说与天气、地图同构；检索挂了主流程照跑（增强不是依赖）。
 - **MCP 的价值演示**：加一个工具 = `servers_config.json` 加一段 JSON，主代码零改动。
 - **混合检索**：英文 MiniLM 中文召回差 → 向量召回 6 条 + 关键词重排取 top3（复用自 Ops Agent）。
-- **安全**：工具全只读；公网限流 10 次/分/IP；消息 ≤500 字；Key 只走环境变量。
+- **安全**：工具全只读；公网限流 30 次/分/IP；消息 ≤500 字；Key 只走环境变量；管理员类工具（`rebuild_knowledge`）在代码层从 Agent 工具列表剔除——权限靠代码边界，不靠 prompt 约束模型。
+- **可靠性**：单次请求 90s 墙钟熔断；ReAct 步数上限 12；客户端断开即停止生成（不浪费 token）；异常详情只进服务端日志，不回传堆栈给用户。
+- **流式答案过滤**：ReAct 每轮工具调用前模型都会输出一段“前言”（实测会输出英文句子），按 `run_id` 分段识别并整段丢弃，只把最终答案段推给用户。不用长度阈值判断——实测前言可达 57 字符，阈值法无法可靠区分。
 - **边界**：无订票/预约能力；模型决策、代码执行；单 Agent 循环（不含任务规划/多 Agent）。
